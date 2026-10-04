@@ -23,6 +23,11 @@ class Conflict(DomainError):
     code = "conflict"
 
 
+class SettlementHeld(Conflict):
+    """版本对不上：差异保留，交收停住。"""
+    code = "settlement_held"
+
+
 class PermissionDenied(DomainError):
     status = 403
     code = "permission_denied"

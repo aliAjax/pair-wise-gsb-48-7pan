@@ -12,6 +12,11 @@ from .domain import Actor, DomainError, PermissionDenied, ValidationError
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
+BATCH_RE = re.compile(r"^/api/batches/(\d+)$")
+BATCH_AUDIT_RE = re.compile(r"^/api/batches/(\d+)/audit$")
+BATCH_CONFIRM_RE = re.compile(r"^/api/batches/(\d+)/confirm$")
+BATCH_RECOMPUTE_RE = re.compile(r"^/api/batches/(\d+)/recompute$")
+BATCH_SETTLE_RE = re.compile(r"^/api/batches/(\d+)/settle$")
 
 
 def make_handler(service: Any, static_dir: Path):
@@ -87,6 +92,26 @@ def make_handler(service: Any, static_dir: Path):
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
                     return
+                if parsed.path == "/api/batches":
+                    query = parse_qs(parsed.query)
+                    batches = service.list_batches(
+                        self._actor(),
+                        state=query.get("state", [None])[0],
+                        limit=int(query.get("limit", ["100"])[0]),
+                    )
+                    self._send(200, {"items": batches})
+                    return
+                match = BATCH_AUDIT_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": service.batch_timeline(self._actor(), int(match.group(1)))})
+                    return
+                match = BATCH_RE.match(parsed.path)
+                if match:
+                    self._send(200, service.get_batch(self._actor(), int(match.group(1))))
+                    return
+                if parsed.path == "/api/batch-stats":
+                    self._send(200, service.batch_stats(self._actor()))
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -106,6 +131,35 @@ def make_handler(service: Any, static_dir: Path):
                         raise ValidationError("expected_version必须是整数")
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
+                    return
+                if parsed.path == "/api/batches":
+                    batch = service.compose_batch(self._actor(), body.get("batch_no", ""), body.get("references", []))
+                    self._send(201, batch)
+                    return
+                match = BATCH_CONFIRM_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    batch = service.confirm_batch(self._actor(), int(match.group(1)), version)
+                    self._send(200, batch)
+                    return
+                match = BATCH_RECOMPUTE_RE.match(parsed.path)
+                if match:
+                    references = body.get("references")
+                    if references is not None and not isinstance(references, list):
+                        raise ValidationError("references必须是数组")
+                    batch = service.recompute_batch(self._actor(), int(match.group(1)), references)
+                    self._send(200, batch)
+                    return
+                match = BATCH_SETTLE_RE.match(parsed.path)
+                if match:
+                    batch = service.complete_settlement(self._actor(), int(match.group(1)))
+                    self._send(200, batch)
+                    return
+                if parsed.path == "/api/receipts":
+                    result = service.post_receipt(self._actor(), body)
+                    self._send(200, result)
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
