@@ -3,31 +3,88 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>证券结算与企业行动处理</title>
+  <title>日终净额结算批次</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #17212b; }
-    main { max-width: 960px; margin: auto; }
-    button { padding: .55rem .9rem; cursor: pointer; }
+    main { max-width: 980px; margin: auto; }
+    button { padding: .5rem .85rem; cursor: pointer; margin-right: .4rem; }
     pre { background: #f4f6f8; padding: 1rem; overflow: auto; border-radius: 8px; }
-    .row { display: flex; gap: 1rem; align-items: center; }
+    .row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: .6rem 0; }
+    select { padding: .45rem; }
+    .note { color: #5b6770; font-size: .9rem; }
   </style>
 </head>
 <body>
 <main>
-  <h1>证券结算与企业行动处理</h1>
-  <p>最小演示页。完整业务流程通过README中的JSON接口调用。</p>
-  <div class="row"><button id="load">加载记录</button><button id="stats">查看状态统计</button></div>
-  <pre id="output">点击上方按钮读取服务状态。</pre>
+  <h1>日终净额结算批次</h1>
+  <p class="note">演示页。身份（角色/机构）决定可执行动作；会员仅能操作本机构指令，结算主管组批/确认/交收，托管方登记回执。</p>
+  <div class="row">
+    <label>身份：
+      <select id="actor">
+        <option value="member|ORG-A">会员 ORG-A</option>
+        <option value="member|ORG-B">会员 ORG-B</option>
+        <option value="settlement_officer|">结算主管</option>
+        <option value="custodian|">托管方</option>
+        <option value="corporate_actions|">公司行动岗</option>
+      </select>
+    </label>
+  </div>
+  <div class="row">
+    <button data-act="seed">① 写入演示指令</button>
+    <button data-act="ca">② 发布公司行动v1</button>
+    <button data-act="build">③ 组净额批次 B-DEMO</button>
+    <button data-act="confirm">④ 确认批次（冻结）</button>
+    <button data-act="receipts">⑤ 登记托管回执</button>
+    <button data-act="reconcile">⑥ 回执对账</button>
+    <button data-act="settle">⑦ 交收</button>
+  </div>
+  <div class="row">
+    <button data-act="batches">批次列表</button>
+    <button data-act="detail">批次详情</button>
+    <button data-act="audit">批次审计</button>
+    <button data-act="stats">统计</button>
+  </div>
+  <pre id="output">点击按钮执行对应步骤，响应将显示在此处。</pre>
 </main>
 <script>
-const headers = {"X-User-Id":"demo-admin","X-Role":"admin","X-Org":"demo"};
-async function show(path) {
-  const response = await fetch(path, {headers});
-  const data = await response.json();
-  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+const output = document.getElementById("output");
+function authHeaders() {
+  const [role, org] = document.getElementById("actor").value.split("|");
+  return {"Content-Type": "application/json", "X-User-Id": "demo-" + role, "X-Role": role, "X-Org": org};
 }
-document.getElementById("load").onclick = () => show("/api/records?limit=20");
-document.getElementById("stats").onclick = () => show("/api/stats");
+async function call(method, path, body) {
+  const response = await fetch(path, {method, headers: authHeaders(), body: body ? JSON.stringify(body) : undefined});
+  const data = await response.json().catch(() => ({}));
+  output.textContent = "%s %s → %s\n\n".replace("%s", method).replace("%s", path).replace("%s", response.status)
+    + JSON.stringify(data, null, 2);
+  return data;
+}
+const instruction = (ref, org) => ({
+  reference: ref, organization: org, account: "ACC-" + org, currency: "CNY",
+  settlement_date: "2026-10-06", instrument: "ACME", direction: "pay",
+  quantity: 100, price: 10.0, fees: 0.5
+});
+const handlers = {
+  seed: async () => { await call("POST", "/api/instructions", instruction("D1", "ORG-A"));
+                      return call("POST", "/api/instructions", instruction("D2", "ORG-A")); },
+  ca: () => call("POST", "/api/corporate-actions", {instrument: "ACME", factor: 1.0}),
+  build: () => call("POST", "/api/batches", {batch_no: "B-DEMO", references: ["D1", "D2"]}),
+  confirm: async () => { const b = await call("GET", "/api/batches/B-DEMO");
+                         return call("POST", "/api/batches/B-DEMO/confirm", {expected_version: b.version}); },
+  receipts: async () => {
+    await call("POST", "/api/receipts", {receipt_no: "K1", reference: "D1", instruction_version: 1, amount: -1000.5, batch_no: "B-DEMO"});
+    return call("POST", "/api/receipts", {receipt_no: "K2", reference: "D2", instruction_version: 1, amount: -1000.5, batch_no: "B-DEMO"});
+  },
+  reconcile: () => call("POST", "/api/batches/B-DEMO/reconcile", {}),
+  settle: () => call("POST", "/api/batches/B-DEMO/settle", {}),
+  batches: () => call("GET", "/api/batches"),
+  detail: () => call("GET", "/api/batches/B-DEMO"),
+  audit: () => call("GET", "/api/batches/B-DEMO/audit"),
+  stats: () => call("GET", "/api/stats"),
+};
+document.querySelectorAll("button[data-act]").forEach(btn => {
+  btn.onclick = () => handlers[btn.dataset.act]().catch(err => { output.textContent = String(err); });
+});
 </script>
 </body>
 </html>
